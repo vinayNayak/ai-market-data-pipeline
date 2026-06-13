@@ -1,0 +1,32 @@
+---
+description: Python virtual environment location and usage for this project
+alwaysApply: true
+---
+
+# Virtual Environment Location
+
+This project uses a **project-root** virtual environment at `.venv/`.
+
+## Rules
+
+- Create the venv with: `python -m venv .venv`
+- Do **not** create `venv/`, `env/`, or venvs outside the repo root
+- Run Python commands with the project venv:
+  - macOS/Linux: `.venv/bin/python` or `source .venv/bin/activate`
+  - Windows: `.venv\Scripts\python` or `.venv\Scripts\activate`
+- Install dependencies only into `.venv`: `pip install -r requirements.txt`
+
+## Examples
+
+```bash
+# ✅ GOOD — use project venv
+.venv/bin/python scripts/run_pipeline.py
+.venv/bin/pip install -r requirements.txt
+
+# ❌ BAD — system Python or wrong venv path
+python scripts/run_pipeline.py
+python -m venv venv
+pip install -r requirements.txt   # without activating .venv
+```
+
+If `.venv` is missing, create it at the repo root before running pipeline or dashboard commands.
