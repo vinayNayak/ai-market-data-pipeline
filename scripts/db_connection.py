@@ -17,6 +17,16 @@ DEFAULT_DB_USER = "neondb_owner"
 DEFAULT_DB_NAME = "neondb"
 
 
+def build_yoyo_database_url() -> str:
+    """Return a yoyo-compatible PostgreSQL URL using the psycopg3 driver."""
+    url = build_connection_url()
+    if url.startswith("postgresql://"):
+        return url.replace("postgresql://", "postgresql+psycopg://", 1)
+    if url.startswith("postgres://"):
+        return url.replace("postgres://", "postgresql+psycopg://", 1)
+    return url
+
+
 def build_connection_url() -> str:
     """Return a PostgreSQL connection URL from environment variables."""
     database_url = os.getenv("DATABASE_URL")

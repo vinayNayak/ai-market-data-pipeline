@@ -1,68 +1,68 @@
 # AI Market Data Pipeline
 
-An end-to-end stock market data pipeline that fetches market data from the [Alpaca API](https://alpaca.markets/), stores it in a remote PostgreSQL database, and surfaces insights through a deployed [Streamlit](https://streamlit.io/) dashboard.
+A Python pipeline that fetches recent Artificial Intelligence research papers from [OpenAlex](https://openalex.org/), stores flattened records in PostgreSQL, and prepares data for a tracking dashboard.
 
 ## Overview
 
-This project automates the flow from raw market data to actionable visualization:
+The pipeline has three stages:
 
-1. **Ingest** — Pull historical and/or real-time stock data from Alpaca.
-2. **Store** — Persist normalized records in PostgreSQL for querying and analysis.
-3. **Visualize** — Explore prices, trends, and summary metrics in an interactive Streamlit app.
+1. **Fetch** — Query OpenAlex for recent AI papers and save a JSON export to `tmp/`.
+2. **Migrate** — Ensure PostgreSQL tables exist via versioned yoyo migrations.
+3. **Load** — Flatten nested OpenAlex work objects, deduplicate, and upsert into `ai_papers`.
 
 ```mermaid
 flowchart LR
-    A[Alpaca API] -->|Fetch bars / quotes| B[Pipeline]
-    B -->|Upsert| C[(PostgreSQL)]
-    C -->|Query| D[Streamlit Dashboard]
-    D -->|Deploy| E[Hosted App]
+    A[OpenAlex API] -->|list_ai_papers.py| B[JSON export in tmp/]
+    B -->|load_ai_papers.py| C[flatten_paper]
+    C --> D[(PostgreSQL)]
+    E[apply_schema.py] -->|yoyo migrations| D
+    D -->|Query| F[Streamlit Dashboard]
 ```
 
 ## Features
 
-- Automated data ingestion from Alpaca (bars, quotes, or trades depending on configuration)
-- Centralized storage in a remote PostgreSQL database
-- Idempotent writes to avoid duplicate records on re-runs
-- Interactive dashboard for price history, symbol lookup, and market insights
-- Environment-based configuration for local development and production deployment
+- Fetch recent AI papers from OpenAlex by subfield and publication date range
+- Flatten nested OpenAlex JSON into a dashboard-friendly PostgreSQL schema
+- Automatic schema setup on ingest (only applies pending migrations)
+- Two-layer deduplication: within the JSON file and on `openalex_id` in the database
+- Idempotent re-runs via `ON CONFLICT DO UPDATE`
+- Ingest run history tracked in `paper_ingest_runs`
 
 ## Tech Stack
 
 | Layer        | Technology                          |
 | ------------ | ----------------------------------- |
-| Data source  | Alpaca Markets API                  |
-| Database     | PostgreSQL (remote / managed)       |
-| Pipeline     | Python                              |
-| Dashboard    | Streamlit                           |
-| Deployment   | Streamlit Community Cloud (or similar) |
+| Data source  | OpenAlex API (`pyalex`)             |
+| Database     | PostgreSQL (Neon or other managed)  |
+| Migrations   | yoyo-migrations                     |
+| DB driver    | psycopg 3                           |
+| Pipeline     | Python 3.9+                         |
+| Dashboard    | Streamlit (planned)                 |
 
 ## Project Structure
 
 ```
 ai-market-data-pipeline/
 ├── README.md
-├── requirements.txt          # Python dependencies
-├── .env.example              # Template for environment variables
-├── pipeline/
-│   ├── fetch.py              # Alpaca API client and fetch logic
-│   ├── transform.py          # Data cleaning and normalization
-│   └── load.py               # PostgreSQL insert / upsert
+├── requirements.txt
+├── yoyo.ini                         # yoyo migration config
 ├── db/
-│   └── schema.sql            # Table definitions and indexes
-├── dashboard/
-│   └── app.py                # Streamlit application
-└── scripts/
-    └── run_pipeline.py       # Entry point to run ingest end-to-end
+│   └── migrations/
+│       └── 20260615_01_create_ai_papers.py
+├── scripts/
+│   ├── list_ai_papers.py            # Fetch papers from OpenAlex → JSON
+│   ├── load_ai_papers.py            # Ingest JSON → PostgreSQL
+│   ├── apply_schema.py              # Apply pending DB migrations
+│   ├── flatten_paper.py             # OpenAlex work → flat row mapper
+│   └── db_connection.py             # PostgreSQL connection helpers
+└── tmp/                             # JSON exports (gitignored)
 ```
-
-> Layout may evolve as the codebase is implemented.
 
 ## Prerequisites
 
-- **Python 3.10+**
-- **Alpaca account** with API key and secret ([sign up](https://app.alpaca.markets/signup))
-- **PostgreSQL database** (e.g. Supabase, Neon, RDS, or self-hosted)
-- **Streamlit account** for deployment (optional for local development)
+- **Python 3.9+**
+- **PostgreSQL database** (e.g. Neon, Supabase, RDS)
+- **OpenAlex API key** (optional, but recommended for higher rate limits)
 
 ## Setup
 
@@ -81,74 +81,135 @@ source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
+Always use the project venv at `.venv/` for pipeline commands.
+
 ### 3. Configure environment variables
 
-Copy the example env file and fill in your credentials:
+Create a `.env` file in the project root:
 
-```bash
-cp .env.example .env
-```
-
-| Variable              | Description                                      |
-| --------------------- | ------------------------------------------------ |
-| `ALPACA_API_KEY`      | Alpaca API key ID                                  |
-| `ALPACA_SECRET_KEY`   | Alpaca API secret key                              |
-| `ALPACA_BASE_URL`     | API base URL (paper: `https://paper-api.alpaca.markets`) |
-| `DATABASE_URL`        | PostgreSQL connection string                       |
-| `SYMBOLS`             | Comma-separated tickers (e.g. `AAPL,MSFT,GOOGL`)   |
+| Variable           | Description                                           |
+| ------------------ | ----------------------------------------------------- |
+| `DATABASE_URL`     | Full PostgreSQL connection string (preferred)          |
+| `DB_PASSWORD`      | Database password (if `DATABASE_URL` is not set)     |
+| `DB_HOST`          | Database host (optional, has Neon default)           |
+| `DB_USER`          | Database user (optional, has default)                |
+| `DB_NAME`          | Database name (optional, has default)                |
+| `OPENALEX_API_KEY` | OpenAlex API key (optional, improves rate limits)    |
 
 Never commit `.env` or real credentials to version control.
 
 ### 4. Initialize the database
 
-Apply the schema to your PostgreSQL instance:
+Apply migrations to create `ai_papers` and `paper_ingest_runs`:
 
 ```bash
-psql "$DATABASE_URL" -f db/schema.sql
+.venv/bin/python scripts/apply_schema.py
 ```
+
+Check migration status:
+
+```bash
+.venv/bin/python scripts/apply_schema.py --list
+```
+
+You do not need to run this manually before every ingest — `load_ai_papers.py` calls `apply_schema()` automatically and only applies pending migrations.
 
 ## Usage
 
-### Run the data pipeline
+### Step 1: Fetch papers from OpenAlex
 
-Fetch data from Alpaca and load it into PostgreSQL:
-
-```bash
-python scripts/run_pipeline.py
-```
-
-Schedule this command (e.g. via cron, GitHub Actions, or a cloud scheduler) for recurring updates.
-
-### Run the dashboard locally
+Fetches recent Artificial Intelligence papers and writes a timestamped JSON file to `tmp/`:
 
 ```bash
-streamlit run dashboard/app.py
+.venv/bin/python scripts/list_ai_papers.py
 ```
 
-Open the URL shown in the terminal (typically `http://localhost:8501`).
+Output example: `tmp/ai_papers_20260614_192257.json`
 
-## Deployment
+The JSON payload includes metadata (`fetched_at`, `date_range`, `subfield`) and a `papers` array of raw OpenAlex work objects.
 
-### Streamlit dashboard
+### Step 2: Load papers into PostgreSQL
 
-1. Push the repository to GitHub.
-2. Connect the repo in [Streamlit Community Cloud](https://streamlit.io/cloud).
-3. Set the same environment variables (`DATABASE_URL`, etc.) in the app settings.
-4. Deploy `dashboard/app.py` as the main file.
+Ingest a JSON export into the `ai_papers` table:
 
-### Pipeline scheduling
+```bash
+.venv/bin/python scripts/load_ai_papers.py tmp/ai_papers_20260614_192257.json
+```
 
-Run the ingest script on a schedule so the dashboard always has fresh data. Options include:
+This script:
 
-- **GitHub Actions** — cron-triggered workflow
-- **Cloud scheduler** — AWS EventBridge, GCP Cloud Scheduler, etc.
-- **Cron** — on a VM or container with network access to Alpaca and Postgres
+1. Calls `apply_schema()` to create tables if required
+2. Connects to PostgreSQL via `db_connection.connect()`
+3. Flattens each paper with `flatten_paper()`
+4. Deduplicates records within the JSON file by `openalex_id`
+5. Upserts rows into `ai_papers` using `ON CONFLICT (openalex_id) DO UPDATE`
+6. Records the run in `paper_ingest_runs`
+
+Example output:
+
+```
+Schema already up to date.
+Source: tmp/ai_papers_20260614_192257.json
+Ingest run id: 1
+Upserted 2084 papers
+```
+
+Re-running the same file is safe: existing rows are updated, not duplicated.
+
+### Programmatic usage
+
+```python
+from pathlib import Path
+from load_ai_papers import ingest_from_json
+
+result = ingest_from_json(Path("tmp/ai_papers_20260614_192257.json"))
+print(result.upserted, result.duplicates_in_file, result.skipped_invalid)
+```
+
+## Database Schema
+
+### `ai_papers`
+
+Flattened paper records for dashboard queries. Key columns:
+
+| Column               | Purpose                                      |
+| -------------------- | -------------------------------------------- |
+| `openalex_id`        | Primary key (deduplication key)              |
+| `title`, `doi`       | Display and linking                          |
+| `publication_date`   | Time-series charts                           |
+| `primary_topic_name` | Topic breakdown                              |
+| `subfield_name`      | AI subfield filter                           |
+| `oa_status`, `is_oa` | Open-access analysis                         |
+| `cited_by_count`     | Citation metrics                             |
+| `source_name`        | Venue / publisher breakdown                  |
+
+### `paper_ingest_runs`
+
+Audit log of each JSON ingest (source date range, subfield, paper count).
+
+### Migrations
+
+Schema changes live in `db/migrations/` as yoyo migration files. To add a new migration, create a file such as:
+
+```
+db/migrations/20260620_02_add_column.py
+```
+
+Each file defines `steps = [step(apply_sql, rollback_sql)]`.
+
+## Deduplication
+
+| Layer              | Where                         | Behaviour                                      |
+| ------------------ | ----------------------------- | ---------------------------------------------- |
+| Within JSON file   | `load_ai_papers.prepare_rows` | Skips duplicate `openalex_id` in the same file |
+| Database           | `ai_papers` primary key       | `ON CONFLICT DO UPDATE` on re-ingest           |
 
 ## Security Notes
 
-- Store API keys and database credentials in a secrets manager or platform env vars, not in source code.
-- Use read-only database credentials for the Streamlit app when possible.
+- Store database credentials in a secrets manager or platform env vars, not in source code.
+- Use read-only database credentials for the Streamlit dashboard when possible.
 - Prefer TLS-enabled PostgreSQL connections (`sslmode=require` in the connection string).
+- Do not commit `.env` files containing passwords.
 
 ## License
 
