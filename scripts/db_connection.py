@@ -7,6 +7,7 @@ from pathlib import Path
 from urllib.parse import quote_plus
 
 import psycopg
+from dotenv import load_dotenv
 from psycopg import Connection
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -14,22 +15,6 @@ DEFAULT_SSL_PARAMS = "sslmode=require&channel_binding=require"
 DEFAULT_DB_HOST = "ep-orange-mouse-admjg3nn-pooler.c-2.us-east-1.aws.neon.tech"
 DEFAULT_DB_USER = "neondb_owner"
 DEFAULT_DB_NAME = "neondb"
-
-
-def load_dotenv(path: Path | None = None) -> None:
-    """Load KEY=VALUE pairs from a .env file without overriding existing env vars."""
-    env_path = path or PROJECT_ROOT / ".env"
-    if not env_path.is_file():
-        return
-
-    for line in env_path.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, _, value = line.partition("=")
-        key = key.strip()
-        value = value.strip().strip('"').strip("'")
-        os.environ.setdefault(key, value)
 
 
 def build_connection_url() -> str:
@@ -58,7 +43,7 @@ def build_connection_url() -> str:
 def connect(*, load_env: bool = True) -> Connection:
     """Open a new PostgreSQL connection."""
     if load_env:
-        load_dotenv()
+        load_dotenv(PROJECT_ROOT / ".env")
     return psycopg.connect(build_connection_url())
 
 
